@@ -26,7 +26,7 @@ import me.ele.lancet.weaver.Weaver;
 import me.ele.lancet.weaver.internal.log.Log;
 
 /**
- * Writes transformed classes into a single merged jar, with optional woven output cache.
+ * Writes transformed classes into a single merged jar, with entry level woven output cache.
  */
 public class TransformProcessor implements ClassFetcher, Closeable {
 
@@ -35,7 +35,6 @@ public class TransformProcessor implements ClassFetcher, Closeable {
     private final WovenOutputCache wovenCache;
     private final Object outputLock = new Object();
     private final Set<String> writtenEntries = ConcurrentHashMap.newKeySet();
-    private final Map<QualifiedContent, WovenOutputCache.JarCacheWriter> jarCacheWriters = new ConcurrentHashMap<>();
     private JarOutputStream jarOutputStream;
 
     public TransformProcessor(TransformContext context, Weaver weaver, WovenOutputCache wovenCache) {
@@ -45,56 +44,35 @@ public class TransformProcessor implements ClassFetcher, Closeable {
     }
 
     /**
-     * Restores unchanged jars directly from the woven jar cache.
+     * Restores unchanged class/resource entries from the woven cache.
      */
-    public void restoreCachedJars(Collection<JarInput> jarInputs) throws IOException {
-        for (JarInput jarInput : jarInputs) {
-            if (jarInput.getStatus() != Status.NOTCHANGED) {
-                continue;
-            }
-            File inputJar = jarInput.getFile();
-            if (!wovenCache.hasJarCache(inputJar)) {
-                Log.i("Woven jar cache miss, will reprocess: " + inputJar.getName());
-                continue;
-            }
-            wovenCache.forEachJarEntry(inputJar, this::writeEntry);
-        }
-    }
-
-    /**
-     * Restores unchanged directory classes from the class cache.
-     */
-    public void restoreCachedDirectoryClasses(TransformContext context) throws IOException {
-        Set<String> changedEntries = collectChangedDirectoryEntries(context.getAllDirs());
+    public void restoreUnchangedEntries(Set<String> changedClassEntries) throws IOException {
         File classCacheDir = wovenCache.getClassCacheDir();
         if (!classCacheDir.isDirectory()) {
             return;
         }
+        int restored = 0;
         for (File file : Files.fileTraverser().depthFirstPreOrder(classCacheDir)) {
-            if (!file.isFile() || !file.getName().endsWith(".class")) {
+            if (!file.isFile()) {
                 continue;
             }
             String entryName = classCacheDir.toURI().relativize(file.toURI()).toString();
-            if (changedEntries.contains(entryName)) {
+            if (changedClassEntries.contains(entryName)) {
                 continue;
             }
             writeEntry(entryName, Files.toByteArray(file));
+            restored++;
         }
+        Log.i("TransformProcessor: restored " + restored + " cached entries");
     }
 
     @Override
     public boolean onStart(QualifiedContent content) throws IOException {
         if (content instanceof JarInput) {
             JarInput jarInput = (JarInput) content;
-            if (jarInput.getStatus() == Status.REMOVED) {
+            if (jarInput.getStatus() == Status.REMOVED || jarInput.getStatus() == Status.NOTCHANGED) {
                 return false;
             }
-            if (jarInput.getStatus() == Status.NOTCHANGED) {
-                return false;
-            }
-            ensureOutputOpen();
-            jarCacheWriters.put(content, wovenCache.openJarCacheWriter(jarInput.getFile()));
-            return true;
         }
         ensureOutputOpen();
         return true;
@@ -107,26 +85,19 @@ public class TransformProcessor implements ClassFetcher, Closeable {
         }
         if (!relativePath.endsWith(".class")) {
             writeEntry(relativePath, bytes);
-            writeJarCacheEntry(content, relativePath, bytes);
+            wovenCache.putClassEntry(relativePath, bytes);
             return;
         }
         for (ClassData classData : weaver.weave(bytes, relativePath)) {
             String entryName = classData.getClassName() + ".class";
             byte[] classBytes = classData.getClassBytes();
             writeEntry(entryName, classBytes);
-            writeJarCacheEntry(content, entryName, classBytes);
-            if (!(content instanceof JarInput)) {
-                wovenCache.putClassEntry(entryName, classBytes);
-            }
+            wovenCache.putClassEntry(entryName, classBytes);
         }
     }
 
     @Override
-    public void onComplete(QualifiedContent content) throws IOException {
-        WovenOutputCache.JarCacheWriter writer = jarCacheWriters.remove(content);
-        if (writer != null) {
-            writer.close();
-        }
+    public void onComplete(QualifiedContent content) {
     }
 
     @Override
@@ -136,31 +107,6 @@ public class TransformProcessor implements ClassFetcher, Closeable {
                 jarOutputStream.close();
                 jarOutputStream = null;
             }
-        }
-        for (WovenOutputCache.JarCacheWriter writer : jarCacheWriters.values()) {
-            writer.close();
-        }
-        jarCacheWriters.clear();
-    }
-
-    private Set<String> collectChangedDirectoryEntries(Collection<DirectoryInput> directoryInputs) {
-        Set<String> changedEntries = new HashSet<>();
-        for (DirectoryInput directoryInput : directoryInputs) {
-            URI base = directoryInput.getFile().toURI();
-            for (Map.Entry<File, Status> entry : directoryInput.getChangedFiles().entrySet()) {
-                if (entry.getValue() == Status.REMOVED) {
-                    continue;
-                }
-                changedEntries.add(base.relativize(entry.getKey().toURI()).toString());
-            }
-        }
-        return changedEntries;
-    }
-
-    private void writeJarCacheEntry(QualifiedContent content, String entryName, byte[] bytes) throws IOException {
-        WovenOutputCache.JarCacheWriter writer = jarCacheWriters.get(content);
-        if (writer != null) {
-            writer.writeEntry(entryName, bytes);
         }
     }
 

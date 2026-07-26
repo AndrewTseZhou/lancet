@@ -2,7 +2,6 @@ package me.ele.lancet.plugin;
 
 import com.android.build.api.transform.DirectoryInput;
 import com.android.build.api.transform.JarInput;
-import com.android.build.api.transform.Status;
 import com.google.common.base.Strings;
 import com.google.common.io.Files;
 
@@ -19,18 +18,14 @@ import org.gradle.api.tasks.OutputFile;
 import org.gradle.api.tasks.PathSensitive;
 import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
-import org.gradle.work.InputChanges;
 
 import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
-
-import me.ele.lancet.plugin.internal.transform.SimpleJarInput;
 
 import me.ele.lancet.plugin.internal.GlobalContext;
 import me.ele.lancet.plugin.internal.InputChangeDetector;
@@ -79,7 +74,7 @@ public abstract class LancetTransformTask extends DefaultTask {
     public abstract Property<String> getVariantName();
 
     @TaskAction
-    public void executeTask(InputChanges inputChanges) throws IOException, InterruptedException {
+    public void executeTask() throws IOException, InterruptedException {
         String variantName = getVariantName().getOrNull();
         GlobalContext global = new GlobalContext(getProject(), variantName);
         LocalCache cache = new LocalCache(global.getLancetDir());
@@ -87,11 +82,11 @@ public abstract class LancetTransformTask extends DefaultTask {
 
         initLog(global);
 
-        Log.i("start time: " + System.currentTimeMillis());
+        long start = System.currentTimeMillis();
+        Log.i("start time: " + start);
 
         boolean enableIncremental = Boolean.TRUE.equals(getEnableIncremental().getOrElse(true));
         InputChangeDetector.Result changeResult = InputChangeDetector.detect(
-                inputChanges,
                 getAllJars(),
                 getAllDirs(),
                 enableIncremental,
@@ -102,14 +97,12 @@ public abstract class LancetTransformTask extends DefaultTask {
         List<DirectoryInput> directoryInputs = changeResult.getDirectoryInputs();
         boolean contextIncremental = changeResult.isIncremental();
 
-        if (contextIncremental) {
-            jarInputs = reconcileJarCacheMisses(jarInputs, wovenCache);
-        }
-
         TransformContext context = new TransformContext(jarInputs, directoryInputs, contextIncremental,
                 getOutput().get().getAsFile(), global);
+        context.setChangedClassEntries(changeResult.getChangedClassEntries());
 
         Log.i("after input detection, incremental: " + context.isIncremental()
+                + ", changed classes: " + changeResult.getChangedClassEntries().size()
                 + ", jars: " + jarInputs.size() + ", dirs: " + directoryInputs.size());
         Log.i("now: " + System.currentTimeMillis());
 
@@ -135,14 +128,13 @@ public abstract class LancetTransformTask extends DefaultTask {
         TransformProcessor processor = new TransformProcessor(context, weaver, wovenCache);
         try {
             if (incremental) {
-                processor.restoreCachedJars(context.getNotChangedJars());
-                processor.restoreCachedDirectoryClasses(context);
+                processor.restoreUnchangedEntries(changeResult.getChangedClassEntries());
             }
             new ContextReader(context).accept(incremental, processor);
         } finally {
             processor.close();
         }
-        Log.i("build successfully done");
+        Log.i("build successfully done, cost: " + (System.currentTimeMillis() - start) + "ms");
         Log.i("now: " + System.currentTimeMillis());
 
         cache.updateFingerprints(changeResult.getFingerprints());
@@ -179,21 +171,5 @@ public abstract class LancetTransformTask extends DefaultTask {
             Files.createParentDirs(logFile);
             Log.setImpl(FileLoggerImpl.of(logFile.getAbsolutePath()));
         }
-    }
-
-    /**
-     * Reclassifies unchanged jars without woven cache as changed so output stays complete.
-     */
-    private List<JarInput> reconcileJarCacheMisses(List<JarInput> jarInputs, WovenOutputCache wovenCache) {
-        List<JarInput> reconciled = new ArrayList<>(jarInputs.size());
-        for (JarInput jarInput : jarInputs) {
-            if (jarInput.getStatus() == Status.NOTCHANGED && !wovenCache.hasJarCache(jarInput.getFile())) {
-                Log.i("Woven jar cache miss, reprocess jar: " + jarInput.getFile().getName());
-                reconciled.add(new SimpleJarInput(jarInput.getFile(), Status.CHANGED));
-            } else {
-                reconciled.add(jarInput);
-            }
-        }
-        return reconciled;
     }
 }

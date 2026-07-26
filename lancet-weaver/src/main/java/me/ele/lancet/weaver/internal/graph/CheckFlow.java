@@ -88,7 +88,7 @@ public class CheckFlow {
                 return true;
             }
             Map<String, Node> map = directChildrenOf(n);
-            Log.e(map.size() + " " + children.size());
+            Log.d(map.size() + " " + children.size());
             for (FlowNode c : children) {
                 Node child = map.remove(c.className);
                 if (child == null && !c.allModified(graph)

@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 
 import me.ele.lancet.weaver.internal.graph.Graph;
 
@@ -32,6 +33,7 @@ public class TransformContext {
     private final GlobalContext global;
     private List<String> hookClasses;
     private Graph graph;
+    private Set<String> changedClassEntries = Collections.emptySet();
 
     public TransformContext(Collection<JarInput> jarInputs, Collection<DirectoryInput> directoryInputs, boolean incremental,
                             File outputFile, GlobalContext global) {
@@ -125,6 +127,16 @@ public class TransformContext {
 
     public void setGraph(Graph graph) {
         this.graph = graph;
+    }
+
+    public Set<String> getChangedClassEntries() {
+        return changedClassEntries;
+    }
+
+    public void setChangedClassEntries(Set<String> changedClassEntries) {
+        this.changedClassEntries = changedClassEntries == null
+                ? Collections.emptySet()
+                : Collections.unmodifiableSet(changedClassEntries);
     }
 
     @Override

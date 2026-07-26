@@ -5,6 +5,7 @@ import com.google.common.io.Files;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
+import com.google.gson.reflect.TypeToken;
 
 import org.apache.commons.io.Charsets;
 
@@ -12,27 +13,37 @@ import java.io.File;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.Writer;
+import java.lang.reflect.Type;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Stream;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import me.ele.lancet.plugin.internal.preprocess.MetaGraphGeneratorImpl;
 import me.ele.lancet.weaver.internal.graph.CheckFlow;
 import me.ele.lancet.weaver.internal.graph.ClassEntity;
 
 /**
- * Created by gengwanpeng on 17/4/26.
+ * Persistent cache for Lancet incremental compilation.
  */
 public class LocalCache {
 
-    // Persistent storage for metas
-    private File localCache;
+    private static final Type FINGERPRINT_MAP_TYPE = new TypeToken<Map<String, FileFingerprint>>() {
+    }.getType();
+
+    private final File localCache;
+    private final File fingerprintCache;
     private final Metas metas;
-    private Gson gson = new GsonBuilder().disableHtmlEscaping().create();
+    private Map<String, FileFingerprint> entryFingerprints = Collections.emptyMap();
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     public LocalCache(File dir) {
         localCache = new File(dir, "buildCache.json");
+        fingerprintCache = new File(dir, "entryFingerprints.json");
         metas = loadCache();
+        entryFingerprints = loadFingerprints();
     }
 
     private Metas loadCache() {
@@ -51,6 +62,24 @@ public class LocalCache {
         return new Metas();
     }
 
+    private Map<String, FileFingerprint> loadFingerprints() {
+        if (!fingerprintCache.isFile()) {
+            Map<String, FileFingerprint> legacy = metas.fingerprints;
+            return legacy == null ? Collections.emptyMap() : legacy;
+        }
+        try {
+            Reader reader = Files.newReader(fingerprintCache, Charsets.UTF_8);
+            Map<String, FileFingerprint> loaded = gson.fromJson(reader, FINGERPRINT_MAP_TYPE);
+            return loaded == null ? Collections.emptyMap() : loaded;
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        } catch (JsonParseException e) {
+            if (!fingerprintCache.delete()) {
+                throw new RuntimeException("fingerprint cache has been modified, but can't delete.", e);
+            }
+            return Collections.emptyMap();
+        }
+    }
 
     public List<String> hookClasses() {
         return metas.hookClasses;
@@ -65,38 +94,35 @@ public class LocalCache {
     }
 
     public Map<String, FileFingerprint> getFingerprints() {
-        return metas.fingerprints == null ? java.util.Collections.emptyMap() : metas.fingerprints;
+        return entryFingerprints;
     }
 
     public void updateFingerprints(Map<String, FileFingerprint> fingerprints) {
-        metas.fingerprints = fingerprints;
+        entryFingerprints = fingerprints == null ? Collections.emptyMap() : new LinkedHashMap<>(fingerprints);
+        metas.fingerprints = entryFingerprints;
     }
-
 
     /**
-     * if hook class has modified.
-     * @param context TransformContext for this compile
-     * @return true if hook class hasn't modified.
+     * Returns true when any hook class entry changed in this compilation.
      */
     public boolean isHookClassModified(TransformContext context) {
-        boolean jarHookChanged = Stream.concat(context.getRemovedJars().stream(), context.getChangedJars().stream())
-                .anyMatch(jarInput -> metas.jarsWithHookClasses.contains(jarInput.getFile().getAbsolutePath()));
-        if (jarHookChanged) {
-            return true;
+        Set<String> changedEntries = context.getChangedClassEntries();
+        if (changedEntries.isEmpty()) {
+            return false;
         }
-        return isHookClassInDirModified(context);
-    }
-
-    private boolean isHookClassInDirModified(TransformContext context) {
+        for (String hookClass : metas.hookClasses) {
+            if (changedEntries.contains(hookClass + ".class")) {
+                return true;
+            }
+        }
         if (metas.hookClassesInDir == null || metas.hookClassesInDir.isEmpty()) {
             return false;
         }
-        java.util.Set<String> hookClassPaths = new java.util.HashSet<>(metas.hookClassesInDir);
+        Set<String> hookClassPaths = metas.hookClassesInDir.stream().collect(Collectors.toSet());
         for (com.android.build.api.transform.DirectoryInput directoryInput : context.getAllDirs()) {
-            for (java.util.Map.Entry<File, com.android.build.api.transform.Status> entry
-                    : directoryInput.getChangedFiles().entrySet()) {
+            for (Map.Entry<File, Status> entry : directoryInput.getChangedFiles().entrySet()) {
                 if (hookClassPaths.contains(entry.getKey().getAbsolutePath())
-                        && entry.getValue() != com.android.build.api.transform.Status.NOTCHANGED) {
+                        && entry.getValue() != Status.NOTCHANGED) {
                     return true;
                 }
             }
@@ -109,10 +135,15 @@ public class LocalCache {
     }
 
     public void saveToLocal() {
+        saveCacheFile(localCache, metas.withoutNull(), Metas.class);
+        saveCacheFile(fingerprintCache, entryFingerprints, FINGERPRINT_MAP_TYPE);
+    }
+
+    private void saveCacheFile(File target, Object data, Type type) {
         try {
-            Files.createParentDirs(localCache);
-            Writer writer = Files.newWriter(localCache, Charsets.UTF_8);
-            gson.toJson(metas.withoutNull(), Metas.class, writer);
+            Files.createParentDirs(target);
+            Writer writer = Files.newWriter(target, Charsets.UTF_8);
+            gson.toJson(data, type, writer);
             writer.close();
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -123,6 +154,11 @@ public class LocalCache {
         if (localCache.exists() && localCache.isFile() && !localCache.delete()) {
             throw new IOException("can't delete cache file");
         }
+        if (fingerprintCache.exists() && fingerprintCache.isFile() && !fingerprintCache.delete()) {
+            throw new IOException("can't delete fingerprint cache file");
+        }
+        entryFingerprints = Collections.emptyMap();
+        metas.fingerprints = Collections.emptyMap();
     }
 
     public void savePartially(List<ClassEntity> classMetas) {
@@ -130,7 +166,8 @@ public class LocalCache {
         saveToLocal();
     }
 
-    public void saveFully(List<ClassEntity> classMetas, List<String> hookClasses, List<String> hookClassesInDir, List<String> jarWithHookClasses) {
+    public void saveFully(List<ClassEntity> classMetas, List<String> hookClasses, List<String> hookClassesInDir,
+                          List<String> jarWithHookClasses) {
         metas.classMetas = classMetas;
         metas.hookClasses = hookClasses;
         metas.hookClassesInDir = hookClassesInDir;

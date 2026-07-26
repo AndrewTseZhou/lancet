@@ -1,0 +1,97 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "me.ele",
+    "module": "lancet-plugin",
+    "version": "1.0.9",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.9"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 17,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api"
+      },
+      "files": [
+        {
+          "name": "lancet-plugin-1.0.9.jar",
+          "url": "lancet-plugin-1.0.9.jar",
+          "size": 58750,
+          "sha512": "4cd8b2634463036d57930d5dcd6f220ec5172707d6efc659a42ce1acc5d8f753d0d0ac904c8caabb8f9553c67cd109625375bfa91b30e4ed3704a4eca66e4532",
+          "sha256": "9d393ff07170eb88d5273c28892be16d436370f66dfea128e380935f92be0c96",
+          "sha1": "1fe7871af2dd410823c644b7a8b682aca4206856",
+          "md5": "f15dba480a9ba3b7b612de1f58b40188"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 17,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "com.google.code.gson",
+          "module": "gson",
+          "version": {
+            "requires": "2.8.0"
+          }
+        },
+        {
+          "group": "com.google.guava",
+          "module": "guava",
+          "version": {
+            "requires": "32.1.3-jre"
+          }
+        },
+        {
+          "group": "commons-io",
+          "module": "commons-io",
+          "version": {
+            "requires": "2.11.0"
+          }
+        },
+        {
+          "group": "me.ele",
+          "module": "lancet-base",
+          "version": {
+            "requires": "1.0.9"
+          }
+        },
+        {
+          "group": "me.ele",
+          "module": "lancet-weaver",
+          "version": {
+            "requires": "1.0.9"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "lancet-plugin-1.0.9.jar",
+          "url": "lancet-plugin-1.0.9.jar",
+          "size": 58750,
+          "sha512": "4cd8b2634463036d57930d5dcd6f220ec5172707d6efc659a42ce1acc5d8f753d0d0ac904c8caabb8f9553c67cd109625375bfa91b30e4ed3704a4eca66e4532",
+          "sha256": "9d393ff07170eb88d5273c28892be16d436370f66dfea128e380935f92be0c96",
+          "sha1": "1fe7871af2dd410823c644b7a8b682aca4206856",
+          "md5": "f15dba480a9ba3b7b612de1f58b40188"
+        }
+      ]
+    }
+  ]
+}

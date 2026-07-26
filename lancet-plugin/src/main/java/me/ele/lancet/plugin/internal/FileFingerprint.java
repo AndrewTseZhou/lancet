@@ -1,27 +1,36 @@
 package me.ele.lancet.plugin.internal;
 
+import java.io.File;
+import java.util.zip.CRC32;
+
 /**
- * Lightweight file fingerprint used to detect input changes without AGP Transform status.
+ * Lightweight fingerprint for files or class entry bytes.
  */
 public class FileFingerprint {
 
-    public long lastModified;
+    public long hash;
     public long size;
 
     public FileFingerprint() {
     }
 
-    public FileFingerprint(long lastModified, long size) {
-        this.lastModified = lastModified;
+    public FileFingerprint(long hash, long size) {
+        this.hash = hash;
         this.size = size;
     }
 
-    public static FileFingerprint of(java.io.File file) {
+    public static FileFingerprint ofFile(File file) {
         return new FileFingerprint(file.lastModified(), file.length());
     }
 
-    public boolean matches(java.io.File file) {
-        return file.lastModified() == lastModified && file.length() == size;
+    public static FileFingerprint ofBytes(byte[] bytes) {
+        CRC32 crc32 = new CRC32();
+        crc32.update(bytes);
+        return new FileFingerprint(crc32.getValue(), bytes.length);
+    }
+
+    public boolean matchesBytes(byte[] bytes) {
+        return bytes.length == size && ofBytes(bytes).hash == hash;
     }
 
     @Override
@@ -33,11 +42,11 @@ public class FileFingerprint {
             return false;
         }
         FileFingerprint that = (FileFingerprint) o;
-        return lastModified == that.lastModified && size == that.size;
+        return hash == that.hash && size == that.size;
     }
 
     @Override
     public int hashCode() {
-        return (int) (lastModified ^ (lastModified >>> 32) ^ size);
+        return (int) (hash ^ (hash >>> 32) ^ size);
     }
 }
