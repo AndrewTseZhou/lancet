@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.io.Reader;
 import java.io.Writer;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import me.ele.lancet.plugin.internal.preprocess.MetaGraphGeneratorImpl;
@@ -27,7 +28,7 @@ public class LocalCache {
     // Persistent storage for metas
     private File localCache;
     private final Metas metas;
-    private Gson gson = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
+    private Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     public LocalCache(File dir) {
         localCache = new File(dir, "buildCache.json");
@@ -63,6 +64,14 @@ public class LocalCache {
         return metas.flow;
     }
 
+    public Map<String, FileFingerprint> getFingerprints() {
+        return metas.fingerprints == null ? java.util.Collections.emptyMap() : metas.fingerprints;
+    }
+
+    public void updateFingerprints(Map<String, FileFingerprint> fingerprints) {
+        metas.fingerprints = fingerprints;
+    }
+
 
     /**
      * if hook class has modified.
@@ -70,9 +79,29 @@ public class LocalCache {
      * @return true if hook class hasn't modified.
      */
     public boolean isHookClassModified(TransformContext context) {
-        List<String> hookClasses = metas.jarsWithHookClasses;
-        return Stream.concat(context.getRemovedJars().stream(), context.getChangedJars().stream())
-                .anyMatch(jarInput -> hookClasses.contains(jarInput.getFile().getAbsolutePath()));
+        boolean jarHookChanged = Stream.concat(context.getRemovedJars().stream(), context.getChangedJars().stream())
+                .anyMatch(jarInput -> metas.jarsWithHookClasses.contains(jarInput.getFile().getAbsolutePath()));
+        if (jarHookChanged) {
+            return true;
+        }
+        return isHookClassInDirModified(context);
+    }
+
+    private boolean isHookClassInDirModified(TransformContext context) {
+        if (metas.hookClassesInDir == null || metas.hookClassesInDir.isEmpty()) {
+            return false;
+        }
+        java.util.Set<String> hookClassPaths = new java.util.HashSet<>(metas.hookClassesInDir);
+        for (com.android.build.api.transform.DirectoryInput directoryInput : context.getAllDirs()) {
+            for (java.util.Map.Entry<File, com.android.build.api.transform.Status> entry
+                    : directoryInput.getChangedFiles().entrySet()) {
+                if (hookClassPaths.contains(entry.getKey().getAbsolutePath())
+                        && entry.getValue() != com.android.build.api.transform.Status.NOTCHANGED) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     public void accept(MetaGraphGeneratorImpl graph) {

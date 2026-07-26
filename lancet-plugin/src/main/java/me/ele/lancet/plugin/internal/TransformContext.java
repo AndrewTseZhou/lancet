@@ -26,6 +26,7 @@ public class TransformContext {
     private final Collection<JarInput> addedJars;
     private final Collection<JarInput> removedJars;
     private final Collection<JarInput> changedJars;
+    private final Collection<JarInput> notChangedJars;
     private final Collection<DirectoryInput> allDirs;
 
     private final GlobalContext global;
@@ -42,6 +43,7 @@ public class TransformContext {
         this.addedJars = new ArrayList<>(jarInputs.size());
         this.changedJars = new ArrayList<>(jarInputs.size());
         this.removedJars = new ArrayList<>(jarInputs.size());
+        this.notChangedJars = new ArrayList<>(jarInputs.size());
         this.allDirs = new ArrayList<>(directoryInputs);
 
         if (incremental) {
@@ -55,6 +57,9 @@ public class TransformContext {
                         break;
                     case CHANGED:
                         changedJars.add(j);
+                        break;
+                    case NOTCHANGED:
+                        notChangedJars.add(j);
                         break;
                     default:
                         break;
@@ -86,6 +91,10 @@ public class TransformContext {
 
     public Collection<JarInput> getRemovedJars() {
         return Collections.unmodifiableCollection(removedJars);
+    }
+
+    public Collection<JarInput> getNotChangedJars() {
+        return Collections.unmodifiableCollection(notChangedJars);
     }
 
     public File getOutputFile() {

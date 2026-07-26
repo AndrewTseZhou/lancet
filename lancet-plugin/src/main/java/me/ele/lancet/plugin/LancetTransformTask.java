@@ -19,25 +19,27 @@ import org.gradle.api.tasks.OutputFile;
 import org.gradle.api.tasks.PathSensitive;
 import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
+import org.gradle.work.InputChanges;
 
 import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.util.Collections;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import me.ele.lancet.plugin.internal.transform.SimpleJarInput;
+
 import me.ele.lancet.plugin.internal.GlobalContext;
+import me.ele.lancet.plugin.internal.InputChangeDetector;
 import me.ele.lancet.plugin.internal.LocalCache;
 import me.ele.lancet.plugin.internal.TransformContext;
 import me.ele.lancet.plugin.internal.TransformProcessor;
+import me.ele.lancet.plugin.internal.WovenOutputCache;
 import me.ele.lancet.plugin.internal.context.ContextReader;
 import me.ele.lancet.plugin.internal.preprocess.PreClassAnalysis;
-import me.ele.lancet.plugin.internal.transform.SimpleDirectoryInput;
-import me.ele.lancet.plugin.internal.transform.SimpleJarInput;
 import me.ele.lancet.weaver.MetaParser;
 import me.ele.lancet.weaver.Weaver;
 import me.ele.lancet.weaver.internal.AsmWeaver;
@@ -46,6 +48,9 @@ import me.ele.lancet.weaver.internal.log.Impl.FileLoggerImpl;
 import me.ele.lancet.weaver.internal.log.Log;
 import me.ele.lancet.weaver.internal.parser.AsmMetaParser;
 
+/**
+ * AGP 8 artifact transform task that weaves Lancet hook classes into the merged classes jar.
+ */
 public abstract class LancetTransformTask extends DefaultTask {
 
     @InputFiles
@@ -74,37 +79,42 @@ public abstract class LancetTransformTask extends DefaultTask {
     public abstract Property<String> getVariantName();
 
     @TaskAction
-    public void executeTask() throws IOException, InterruptedException {
+    public void executeTask(InputChanges inputChanges) throws IOException, InterruptedException {
         String variantName = getVariantName().getOrNull();
         GlobalContext global = new GlobalContext(getProject(), variantName);
         LocalCache cache = new LocalCache(global.getLancetDir());
+        WovenOutputCache wovenCache = new WovenOutputCache(global.getLancetDir());
 
         initLog(global);
 
         Log.i("start time: " + System.currentTimeMillis());
 
-        List<JarInput> jarInputs = getAllJars().get().stream()
-                .map(RegularFile::getAsFile)
-                .map(file -> new SimpleJarInput(file, Status.ADDED))
-                .collect(Collectors.toList());
-        List<DirectoryInput> directoryInputs = getAllDirs().get().stream()
-                .map(Directory::getAsFile)
-                .map(dir -> new SimpleDirectoryInput(dir, Collections.emptyMap()))
-                .collect(Collectors.toList());
+        boolean enableIncremental = Boolean.TRUE.equals(getEnableIncremental().getOrElse(true));
+        InputChangeDetector.Result changeResult = InputChangeDetector.detect(
+                inputChanges,
+                getAllJars(),
+                getAllDirs(),
+                enableIncremental,
+                cache
+        );
 
-        if (Boolean.TRUE.equals(getEnableIncremental().getOrElse(false))) {
-            Log.i("Incremental mode is not supported in AGP 8; running a full Lancet transform.");
+        List<JarInput> jarInputs = changeResult.getJarInputs();
+        List<DirectoryInput> directoryInputs = changeResult.getDirectoryInputs();
+        boolean contextIncremental = changeResult.isIncremental();
+
+        if (contextIncremental) {
+            jarInputs = reconcileJarCacheMisses(jarInputs, wovenCache);
         }
-        boolean incremental = false;
 
-        TransformContext context = new TransformContext(jarInputs, directoryInputs, incremental,
+        TransformContext context = new TransformContext(jarInputs, directoryInputs, contextIncremental,
                 getOutput().get().getAsFile(), global);
 
-        Log.i("after android plugin, incremental: " + context.isIncremental());
+        Log.i("after input detection, incremental: " + context.isIncremental()
+                + ", jars: " + jarInputs.size() + ", dirs: " + directoryInputs.size());
         Log.i("now: " + System.currentTimeMillis());
 
         PreClassAnalysis preClassAnalysis = new PreClassAnalysis(cache);
-        incremental = preClassAnalysis.execute(incremental, context);
+        boolean incremental = preClassAnalysis.execute(enableIncremental && contextIncremental, context);
 
         Log.i("after pre analysis, incremental: " + incremental);
         Log.i("now: " + System.currentTimeMillis());
@@ -122,8 +132,12 @@ public abstract class LancetTransformTask extends DefaultTask {
         TransformInfo transformInfo = parser.parse(context.getHookClasses(), context.getGraph());
 
         Weaver weaver = AsmWeaver.newInstance(transformInfo, context.getGraph(), classLoader);
-        TransformProcessor processor = new TransformProcessor(context, weaver);
+        TransformProcessor processor = new TransformProcessor(context, weaver, wovenCache);
         try {
+            if (incremental) {
+                processor.restoreCachedJars(context.getNotChangedJars());
+                processor.restoreCachedDirectoryClasses(context);
+            }
             new ContextReader(context).accept(incremental, processor);
         } finally {
             processor.close();
@@ -131,6 +145,7 @@ public abstract class LancetTransformTask extends DefaultTask {
         Log.i("build successfully done");
         Log.i("now: " + System.currentTimeMillis());
 
+        cache.updateFingerprints(changeResult.getFingerprints());
         cache.saveToLocal();
         Log.i("cache saved");
         Log.i("now: " + System.currentTimeMillis());
@@ -164,5 +179,21 @@ public abstract class LancetTransformTask extends DefaultTask {
             Files.createParentDirs(logFile);
             Log.setImpl(FileLoggerImpl.of(logFile.getAbsolutePath()));
         }
+    }
+
+    /**
+     * Reclassifies unchanged jars without woven cache as changed so output stays complete.
+     */
+    private List<JarInput> reconcileJarCacheMisses(List<JarInput> jarInputs, WovenOutputCache wovenCache) {
+        List<JarInput> reconciled = new ArrayList<>(jarInputs.size());
+        for (JarInput jarInput : jarInputs) {
+            if (jarInput.getStatus() == Status.NOTCHANGED && !wovenCache.hasJarCache(jarInput.getFile())) {
+                Log.i("Woven jar cache miss, reprocess jar: " + jarInput.getFile().getName());
+                reconciled.add(new SimpleJarInput(jarInput.getFile(), Status.CHANGED));
+            } else {
+                reconciled.add(jarInput);
+            }
+        }
+        return reconciled;
     }
 }

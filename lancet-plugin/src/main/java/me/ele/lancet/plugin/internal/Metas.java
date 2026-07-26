@@ -3,6 +3,7 @@ package me.ele.lancet.plugin.internal;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import me.ele.lancet.weaver.internal.graph.CheckFlow;
 import me.ele.lancet.weaver.internal.graph.ClassEntity;
@@ -22,6 +23,8 @@ class Metas {
 
     public List<ClassEntity> classMetas = Collections.emptyList();
 
+    public Map<String, FileFingerprint> fingerprints = Collections.emptyMap();
+
 
     public Metas withoutNull() {
         Metas shallowClone = new Metas();
@@ -39,6 +42,9 @@ class Metas {
         }
         if (flow != null) {
             shallowClone.flow = flow;
+        }
+        if (fingerprints != null) {
+            shallowClone.fingerprints = fingerprints;
         }
         return shallowClone;
     }
